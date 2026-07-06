@@ -219,31 +219,46 @@ var authorizationType: AuthorizationType {
 
 ## Logging
 
-Pass any `NetworkLogging` to observe traffic. Two implementations ship with the package:
+Pass any `NetworkLoggingProtocol` to observe traffic. Two implementations ship with the
+package:
 
 ```swift
-// Verbose output for requests, responses and errors, built on os.Logger.
+// Verbose output for requests, responses, errors and retries, built on os.Logger.
 let client = HTTPClient(configuration: configuration, logger: ConsoleNetworkLogger())
 
 // The default — logs nothing.
 let client = HTTPClient(configuration: configuration, logger: DisabledNetworkLogger())
 ```
 
-`ConsoleNetworkLogger` redacts the `Authorization` header by default (add more via
+Every log entry carries a `NetworkLogContext` — a short `requestID` shared by all
+entries of one call plus a 1-based `attempt` number — so interleaved concurrent
+requests (and their retries) can be correlated. Response entries also report the
+attempt's duration.
+
+`ConsoleNetworkLogger` tags each entry `[requestID #attempt]`, logs responses with
+status ≥ 400 at the `error` level, and includes the elapsed time next to the status
+code. It redacts the `Authorization` header by default (add more via
 `redactedHeaders:`) and logs request/response bodies with `.private` privacy — visible
-while a debugger is attached, hidden in production device logs:
+while a debugger is attached, hidden in production device logs. Bodies longer than
+`maxBodyLength` characters (default 10 000) are truncated, and non-UTF-8 bodies are
+summarized by their byte count:
 
 ```swift
-ConsoleNetworkLogger(redactedHeaders: ["Authorization", "X-Api-Key"])
+ConsoleNetworkLogger(
+    subsystem: "com.example.MyApp",   // defaults to the app's bundle identifier
+    redactedHeaders: ["Authorization", "X-Api-Key"],
+    maxBodyLength: 4_000
+)
 ```
 
 Implement the protocol yourself for custom sinks:
 
 ```swift
-struct AnalyticsNetworkLogger: NetworkLogging {
-    func log(request: URLRequest) { /* ... */ }
-    func log(responseData: Data, response: HTTPURLResponse) { /* ... */ }
-    func log(error: Error, request: URLRequest?) { /* ... */ }
+struct AnalyticsNetworkLogger: NetworkLoggingProtocol {
+    func log(request: URLRequest, context: NetworkLogContext) { /* ... */ }
+    func log(responseData: Data, response: HTTPURLResponse, duration: TimeInterval, context: NetworkLogContext) { /* ... */ }
+    func log(error: Error, request: URLRequest?, context: NetworkLogContext) { /* ... */ }
+    func log(retryDecision: RetryDecision, dueTo error: NetworkError, context: NetworkLogContext) { /* ... */ }
 }
 ```
 

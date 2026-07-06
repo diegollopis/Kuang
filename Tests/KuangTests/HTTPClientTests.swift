@@ -478,6 +478,121 @@ struct HTTPClientTests {
         #expect(session.receivedRequests.count == 1)
     }
 
+    // MARK: - Logging
+
+    @Test("All log entries of one call share a request ID and count attempts")
+    func logEntriesShareRequestIDAndCountAttempts() async throws {
+        let session = HTTPSessionSpy()
+        session.results = [
+            .success((Data(), makeResponse(503))),
+            .success((try okData(), makeResponse()))
+        ]
+        let logger = LoggerSpy()
+
+        let sut = HTTPClient(
+            configuration: makeConfiguration(),
+            session: session,
+            logger: logger,
+            interceptors: [RetryInterceptor(maxRetryCount: 3, delay: 0)]
+        )
+
+        _ = try await sut.request(endpoint: StubEndpoint(), responseType: ResponseDTO.self)
+
+        let ids = Set(logger.requestContexts.map(\.requestID)
+            + logger.responseContexts.map(\.requestID)
+            + logger.errorContexts.map(\.requestID)
+            + logger.retryContexts.map(\.requestID))
+        #expect(ids.count == 1)
+        #expect(logger.requestContexts.map(\.attempt) == [1, 2])
+        #expect(logger.responseContexts.map(\.attempt) == [1, 2])
+    }
+
+    @Test("The error log carries the request that failed")
+    func errorLogCarriesFailedRequest() async {
+        let session = HTTPSessionSpy()
+        session.nextResult = .success((Data(), makeResponse(404)))
+        let logger = LoggerSpy()
+
+        let sut = HTTPClient(configuration: makeConfiguration(), session: session, logger: logger)
+
+        _ = try? await sut.request(endpoint: StubEndpoint(), responseType: ResponseDTO.self)
+
+        #expect(logger.loggedErrorRequests == [session.receivedRequests.first])
+    }
+
+    @Test("A failure before the request is built logs a nil request")
+    func preRequestFailureLogsNilRequest() async {
+        let session = HTTPSessionSpy()
+        let logger = LoggerSpy()
+
+        let sut = HTTPClient(
+            configuration: makeConfiguration(),
+            session: session,
+            authorizationProvider: FailingAuthorizationProvider(),
+            logger: logger
+        )
+
+        _ = try? await sut.request(endpoint: StubEndpoint(authorizationType: .bearerToken), responseType: ResponseDTO.self)
+
+        #expect(logger.loggedErrorRequests == [nil])
+    }
+
+    @Test("Each granted retry is logged with its decision and cause")
+    func retriesAreLogged() async throws {
+        let session = HTTPSessionSpy()
+        session.results = [
+            .success((Data(), makeResponse(503))),
+            .success((Data(), makeResponse(503))),
+            .success((try okData(), makeResponse()))
+        ]
+        let logger = LoggerSpy()
+
+        let sut = HTTPClient(
+            configuration: makeConfiguration(),
+            session: session,
+            logger: logger,
+            interceptors: [RetryInterceptor(maxRetryCount: 3, delay: 0)]
+        )
+
+        _ = try await sut.request(endpoint: StubEndpoint(), responseType: ResponseDTO.self)
+
+        #expect(logger.loggedRetryDecisions == [.retry, .retry])
+        #expect(logger.loggedRetryErrors == [.serverError(statusCode: 503, message: nil), .serverError(statusCode: 503, message: nil)])
+        #expect(logger.retryContexts.map(\.attempt) == [1, 2])
+    }
+
+    @Test("A denied retry is not logged as a retry")
+    func deniedRetryIsNotLogged() async {
+        let session = HTTPSessionSpy()
+        session.nextResult = .success((Data(), makeResponse(404)))
+        let logger = LoggerSpy()
+
+        let sut = HTTPClient(
+            configuration: makeConfiguration(),
+            session: session,
+            logger: logger,
+            interceptors: [RetryInterceptor(maxRetryCount: 3, delay: 0)]
+        )
+
+        _ = try? await sut.request(endpoint: StubEndpoint(), responseType: ResponseDTO.self)
+
+        #expect(logger.loggedRetryDecisions.isEmpty)
+    }
+
+    @Test("The response log reports a non-negative duration")
+    func responseLogReportsDuration() async throws {
+        let session = HTTPSessionSpy()
+        session.nextResult = .success((try okData(), makeResponse()))
+        let logger = LoggerSpy()
+
+        let sut = HTTPClient(configuration: makeConfiguration(), session: session, logger: logger)
+
+        _ = try await sut.request(endpoint: StubEndpoint(), responseType: ResponseDTO.self)
+
+        #expect(logger.loggedDurations.count == 1)
+        #expect(logger.loggedDurations.allSatisfy { $0 >= 0 })
+    }
+
     @Test("RetryInterceptor does not retry non-transient failures")
     func doesNotRetryClientErrors() async {
         let session = HTTPSessionSpy()
@@ -599,6 +714,37 @@ private struct ThrowingAdaptInterceptor: NetworkInterceptorProtocol {
 private struct AlwaysRetryInterceptor: NetworkInterceptorProtocol {
     func retry(_ endpoint: EndpointProtocol, dueTo error: NetworkError, attempt: Int) async -> RetryDecision {
         .retry
+    }
+}
+
+private final class LoggerSpy: NetworkLoggingProtocol, @unchecked Sendable {
+    private(set) var requestContexts: [NetworkLogContext] = []
+    private(set) var responseContexts: [NetworkLogContext] = []
+    private(set) var errorContexts: [NetworkLogContext] = []
+    private(set) var retryContexts: [NetworkLogContext] = []
+    private(set) var loggedErrorRequests: [URLRequest?] = []
+    private(set) var loggedRetryDecisions: [RetryDecision] = []
+    private(set) var loggedRetryErrors: [NetworkError] = []
+    private(set) var loggedDurations: [TimeInterval] = []
+
+    func log(request: URLRequest, context: NetworkLogContext) {
+        requestContexts.append(context)
+    }
+
+    func log(responseData: Data, response: HTTPURLResponse, duration: TimeInterval, context: NetworkLogContext) {
+        responseContexts.append(context)
+        loggedDurations.append(duration)
+    }
+
+    func log(error: Error, request: URLRequest?, context: NetworkLogContext) {
+        errorContexts.append(context)
+        loggedErrorRequests.append(request)
+    }
+
+    func log(retryDecision: RetryDecision, dueTo error: NetworkError, context: NetworkLogContext) {
+        retryContexts.append(context)
+        loggedRetryDecisions.append(retryDecision)
+        loggedRetryErrors.append(error)
     }
 }
 

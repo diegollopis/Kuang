@@ -56,17 +56,26 @@ public final class HTTPClient: NetworkClientProtocol, Sendable {
 private extension HTTPClient {
 
     func send(_ endpoint: EndpointProtocol) async throws -> Data {
+        // Shared by every log entry of this call so its attempts can be
+        // correlated among concurrent traffic.
+        let requestID = NetworkLogContext.makeRequestID()
         var attempt = 0
 
         while true {
             try Task.checkCancellation()
 
+            let context = NetworkLogContext(requestID: requestID, attempt: attempt + 1)
+            // Kept outside the `do` so the error path can log the request that
+            // actually failed; stays `nil` if the failure precedes building it.
+            var request: URLRequest?
+
             do {
-                let request = try await prepareRequest(for: endpoint)
-                logger.log(request: request)
-                return try await perform(request)
+                let preparedRequest = try await prepareRequest(for: endpoint)
+                request = preparedRequest
+                logger.log(request: preparedRequest, context: context)
+                return try await perform(preparedRequest, context: context)
             } catch let networkError as NetworkError {
-                logger.log(error: networkError, request: nil)
+                logger.log(error: networkError, request: request, context: context)
 
                 // `attempt` is zero-based, so `attempt + 1` is the number of
                 // attempts already made.
@@ -74,12 +83,15 @@ private extension HTTPClient {
                     throw networkError
                 }
 
-                switch await retryDecision(for: endpoint, dueTo: networkError, attempt: attempt) {
+                let decision = await retryDecision(for: endpoint, dueTo: networkError, attempt: attempt)
+                switch decision {
                 case .doNotRetry:
                     throw networkError
                 case .retry:
+                    logger.log(retryDecision: decision, dueTo: networkError, context: context)
                     attempt += 1
                 case .retryAfter(let delay):
+                    logger.log(retryDecision: decision, dueTo: networkError, context: context)
                     // Throws `CancellationError` if the task is cancelled while
                     // waiting, aborting the retry loop.
                     try await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
@@ -91,7 +103,7 @@ private extension HTTPClient {
                 // An interceptor's `adapt` threw a non-`NetworkError`; keep the
                 // public contract that this method only ever throws `NetworkError`
                 // (or `CancellationError`).
-                logger.log(error: error, request: nil)
+                logger.log(error: error, request: request, context: context)
                 throw NetworkError.interceptorFailed(error.localizedDescription)
             }
         }
@@ -105,7 +117,8 @@ private extension HTTPClient {
         return request
     }
 
-    func perform(_ request: URLRequest) async throws -> Data {
+    func perform(_ request: URLRequest, context: NetworkLogContext) async throws -> Data {
+        let start = DispatchTime.now()
         do {
             let (data, response) = try await session.data(for: request)
 
@@ -113,7 +126,8 @@ private extension HTTPClient {
                 throw NetworkError.noResponse
             }
 
-            logger.log(responseData: data, response: httpResponse)
+            let duration = TimeInterval(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000_000
+            logger.log(responseData: data, response: httpResponse, duration: duration, context: context)
             try validateStatusCode(of: httpResponse, data: data)
 
             return data
