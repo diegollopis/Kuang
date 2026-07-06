@@ -1,4 +1,6 @@
-# Kuang
+<p align="center">
+  <img src="Assets/kuang-banner.png" alt="Kuang — network layer · swift package" width="720">
+</p>
 
 A small, protocol-oriented networking layer for Swift. It turns type-safe endpoint
 definitions into `URLRequest`s, executes them with `async/await`, decodes the
