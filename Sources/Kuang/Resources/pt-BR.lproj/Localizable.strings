@@ -1,0 +1,7 @@
+"error.invalidURL" = "URL inválida";
+"error.requestEncodingFailed" = "Não foi possível codificar a requisição.";
+"error.authorizationFailed" = "Não foi possível preparar a autorização da requisição.";
+"error.noResponse" = "Sem resposta do servidor. Tente novamente.";
+"error.decodingFailure" = "Erro ao interpretar a resposta do servidor.";
+"error.generic" = "Hum... ocorreu um erro. Tente novamente.";
+"error.interceptorFailed" = "Não foi possível preparar a requisição. Tente novamente.";

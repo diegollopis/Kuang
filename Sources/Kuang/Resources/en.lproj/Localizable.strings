@@ -1,0 +1,7 @@
+"error.invalidURL" = "Invalid URL.";
+"error.requestEncodingFailed" = "Could not encode the request.";
+"error.authorizationFailed" = "Could not prepare the request authorization.";
+"error.noResponse" = "No response from the server. Please try again.";
+"error.decodingFailure" = "Could not interpret the server response.";
+"error.generic" = "Something went wrong. Please try again.";
+"error.interceptorFailed" = "Could not prepare the request. Please try again.";
