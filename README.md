@@ -2,6 +2,13 @@
   <img src="Assets/kuang-banner.png" alt="Kuang — network layer · swift package" width="720">
 </p>
 
+<p align="center">
+  <a href="https://github.com/diegollopis/Kuang/actions/workflows/ci.yml"><img src="https://github.com/diegollopis/Kuang/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/Swift-5.10%2B-F05138?logo=swift&logoColor=white" alt="Swift 5.10+">
+  <img src="https://img.shields.io/badge/Platforms-iOS%2015%2B%20%7C%20macOS%2012%2B-0969da" alt="Platforms: iOS 15+ | macOS 12+">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-lightgrey" alt="License: MIT"></a>
+</p>
+
 A small, protocol-oriented networking layer for Swift. It turns type-safe endpoint
 definitions into `URLRequest`s, executes them with `async/await`, decodes the
 response, and maps transport and HTTP errors into a single `NetworkError` type.
