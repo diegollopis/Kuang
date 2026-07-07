@@ -1,11 +1,18 @@
 import Foundation
 
+/// Abstraction over `URLSession` so the client can be tested with a fake
+/// session that never touches the network.
 public protocol HTTPSessionProtocol: Sendable {
+    /// Mirror of `URLSession.data(for:)`.
     func data(for request: URLRequest) async throws -> (Data, URLResponse)
 }
 
 extension URLSession: HTTPSessionProtocol {}
 
+/// The client surface consumed by app code.
+///
+/// Depend on this protocol rather than on ``HTTPClient`` directly, so the
+/// code making requests can be tested with a stub client.
 public protocol NetworkClientProtocol: Sendable {
     /// Sends the request and decodes the response body into `T`.
     ///
@@ -21,6 +28,12 @@ public protocol NetworkClientProtocol: Sendable {
     func request(endpoint: EndpointProtocol) async throws
 }
 
+/// The package's `URLSession`-backed client.
+///
+/// Builds a `URLRequest` from an ``EndpointProtocol``, applies authorization
+/// and interceptors, executes it, validates the status code and decodes the
+/// response. Every failure surfaces as a ``NetworkError``; task cancellation
+/// propagates as Swift's `CancellationError`.
 public final class HTTPClient: NetworkClientProtocol, Sendable {
 
     private let configuration: NetworkConfiguration
@@ -29,6 +42,15 @@ public final class HTTPClient: NetworkClientProtocol, Sendable {
     private let logger: NetworkLoggingProtocol
     private let interceptors: [NetworkInterceptorProtocol]
 
+    /// - Parameters:
+    ///   - configuration: base URL, default headers, coders and retry cap.
+    ///   - session: transport to use; `URLSession.shared` by default.
+    ///   - authorizationProvider: turns each endpoint's ``AuthorizationType``
+    ///     into headers. Defaults to ``EmptyAuthorizationProvider``, which
+    ///     fails `.bearerToken` endpoints.
+    ///   - logger: traffic observer; logging is disabled by default.
+    ///   - interceptors: run in order on every request (see
+    ///     ``NetworkInterceptorProtocol``).
     public init(
         configuration: NetworkConfiguration,
         session: HTTPSessionProtocol = URLSession.shared,
@@ -44,8 +66,8 @@ public final class HTTPClient: NetworkClientProtocol, Sendable {
     }
 
     public func request<T: Decodable>(endpoint: EndpointProtocol, responseType: T.Type) async throws -> T {
-        let data = try await send(endpoint) // busca os dados
-        return try decode(data, as: responseType) // tenta decodificar o json de response na struct tipada informada no responseType
+        let data = try await send(endpoint)
+        return try decode(data, as: responseType)
     }
 
     public func request(endpoint: EndpointProtocol) async throws {

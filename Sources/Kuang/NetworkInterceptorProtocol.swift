@@ -38,7 +38,9 @@ public extension NetworkInterceptorProtocol {
 /// of times with a fixed delay.
 public struct RetryInterceptor: NetworkInterceptorProtocol {
 
+    /// Maximum number of retries, not counting the first attempt.
     public let maxRetryCount: Int
+    /// Seconds to wait before each retry; `0` retries immediately.
     public let delay: TimeInterval
     private let isRetryable: @Sendable (NetworkError) -> Bool
 

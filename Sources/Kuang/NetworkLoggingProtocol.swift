@@ -10,6 +10,10 @@ public struct NetworkLogContext: Sendable {
     /// 1-based attempt number: `1` is the first try, `2` the first retry…
     public let attempt: Int
 
+    /// - Parameters:
+    ///   - requestID: identifier shared by all entries of one call; see
+    ///     ``makeRequestID()``.
+    ///   - attempt: 1-based attempt number.
     public init(requestID: String, attempt: Int = 1) {
         self.requestID = requestID
         self.attempt = attempt
@@ -21,7 +25,11 @@ public struct NetworkLogContext: Sendable {
     }
 }
 
+/// Receives every request, response, error and retry decision handled by
+/// ``HTTPClient``. Implement it to route traffic to your own sink; the
+/// package ships ``ConsoleNetworkLogger`` and ``DisabledNetworkLogger``.
 public protocol NetworkLoggingProtocol: Sendable {
+    /// Called with the prepared request just before it is sent.
     func log(request: URLRequest, context: NetworkLogContext)
     /// Called for every HTTP response — including non-2xx, which the client
     /// only turns into an error after logging. `duration` is the elapsed time
@@ -35,7 +43,9 @@ public protocol NetworkLoggingProtocol: Sendable {
     func log(retryDecision: RetryDecision, dueTo error: NetworkError, context: NetworkLogContext)
 }
 
+/// The default logger — discards every entry.
 public struct DisabledNetworkLogger: NetworkLoggingProtocol {
+    /// Creates the logger.
     public init() {}
 
     public func log(request: URLRequest, context: NetworkLogContext) {}
