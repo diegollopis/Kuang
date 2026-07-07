@@ -61,13 +61,13 @@ Then list the product in your target:
 
 ### 1. Define an endpoint
 
-Conform an `enum` to `Endpoint`. Only `path` and `method` are required — `task`,
+Conform an `enum` to `EndpointProtocol`. Only `path` and `method` are required — `task`,
 `headers`, `queryItems` and `authorizationType` all have sensible defaults.
 
 ```swift
 import Kuang
 
-enum SpecialistEndpoint: Endpoint {
+enum SpecialistEndpoint: EndpointProtocol {
     case all
     case create(NewSpecialist)
 
@@ -170,7 +170,7 @@ authorization headers, take precedence when keys collide.
 
 ## Authorization
 
-Set `authorizationType` per endpoint; an `AuthorizationProviding` turns it into headers.
+Set `authorizationType` per endpoint; an `AuthorizationProvidingProtocol` turns it into headers.
 
 ```swift
 public enum AuthorizationType {
@@ -273,7 +273,7 @@ struct AnalyticsNetworkLogger: NetworkLoggingProtocol {
 
 ## Interceptors & retries
 
-A `NetworkInterceptor` runs cross-cutting behavior across every request without
+A `NetworkInterceptorProtocol` runs cross-cutting behavior across every request without
 touching the client:
 
 - `adapt(_:for:)` mutates the outgoing request — called **once per attempt**, so it can
@@ -282,8 +282,8 @@ touching the client:
   first interceptor that returns something other than `.doNotRetry` wins.
 
 ```swift
-struct TracingInterceptor: NetworkInterceptor {
-    func adapt(_ request: URLRequest, for endpoint: Endpoint) async throws -> URLRequest {
+struct TracingInterceptor: NetworkInterceptorProtocol {
+    func adapt(_ request: URLRequest, for endpoint: EndpointProtocol) async throws -> URLRequest {
         var request = request
         request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
         return request
@@ -360,7 +360,7 @@ do {
 | `serverError(statusCode:message:)` | `5xx` |
 | `unexpectedStatusCode(_:message:)` | Anything outside `2xx–5xx` |
 
-For HTTP errors, the configuration's `ErrorMessageParsing` extracts a server message
+For HTTP errors, the configuration's `ErrorMessageParsingProtocol` extracts a server message
 and exposes it through `localizedDescription`. The `DefaultErrorMessageParser`
 understands the common shapes — `{"message": …}`, `{"error": …}`, or a short plain-text
 body — and deliberately yields `nil` for markup (HTML error pages from proxies), JSON
@@ -369,7 +369,7 @@ users; they get a localized generic message instead. Plug in your own parser for
 envelopes:
 
 ```swift
-struct ProblemDetailsParser: ErrorMessageParsing {
+struct ProblemDetailsParser: ErrorMessageParsingProtocol {
     func message(from data: Data, response: HTTPURLResponse) -> String? {
         // e.g. RFC 7807: {"title": …, "detail": …}
     }
