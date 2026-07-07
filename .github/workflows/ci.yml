@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-macos:
+    name: Tests (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Run tests
+        run: swift test
+
+  test-ios:
+    name: Tests (iOS Simulator)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: |
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c "import json,sys; data=json.load(sys.stdin)['devices']; print(next(d['name'] for v in data.values() for d in v if d['name'].startswith('iPhone')))")
+          echo "Simulator: $DEVICE"
+          xcodebuild test -scheme Kuang -destination "platform=iOS Simulator,name=$DEVICE"
+
+  api-breakage:
+    name: API breaking changes
+    if: github.event_name == 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compare public API against latest release tag
+        run: |
+          BASELINE=$(git describe --tags --abbrev=0)
+          echo "Baseline: $BASELINE"
+          swift package diagnose-api-breaking-changes "$BASELINE"
