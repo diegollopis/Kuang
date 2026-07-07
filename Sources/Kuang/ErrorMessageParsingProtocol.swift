@@ -8,6 +8,8 @@ import Foundation
 /// message. Provide your own implementation when your API uses an error
 /// envelope the ``DefaultErrorMessageParser`` doesn't understand.
 public protocol ErrorMessageParsingProtocol: Sendable {
+    /// Returns the user-facing message carried by an error response, or `nil`
+    /// to fall back to a localized generic message.
     func message(from data: Data, response: HTTPURLResponse) -> String?
 }
 
@@ -22,6 +24,8 @@ public struct DefaultErrorMessageParser: ErrorMessageParsingProtocol {
 
     private let maxPlainTextLength: Int
 
+    /// - Parameter maxPlainTextLength: plain-text bodies longer than this are
+    ///   treated as not user-facing and yield `nil`.
     public init(maxPlainTextLength: Int = 300) {
         self.maxPlainTextLength = maxPlainTextLength
     }

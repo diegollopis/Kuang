@@ -1,12 +1,20 @@
 import Foundation
 
+/// How a request is authorized, declared per endpoint.
 public enum AuthorizationType: Sendable {
+    /// No authorization header.
     case none
+    /// `Authorization: Bearer <token>`, with the token supplied by the
+    /// client's ``BearerTokenAuthorizationProvider``.
     case bearerToken
+    /// A verbatim `Authorization` header value, e.g. `"ApiKey abc123"`.
     case custom(String)
 }
 
+/// Turns an endpoint's ``AuthorizationType`` into concrete headers.
 public protocol AuthorizationProvidingProtocol: Sendable {
+    /// Returns the headers to set for `authorizationType`. Any thrown error
+    /// fails the request as ``NetworkError/authorizationFailed``.
     func headers(for authorizationType: AuthorizationType) throws -> [String: String]
 }
 
@@ -36,6 +44,8 @@ public struct EmptyAuthorizationProvider: AuthorizationProvidingProtocol {
     }
 }
 
+/// Sends `Authorization: Bearer <token>`, fetching the token lazily on each
+/// request so a value refreshed mid-session is always picked up.
 public struct BearerTokenAuthorizationProvider: AuthorizationProvidingProtocol {
 
     /// What to do when an endpoint requires `.bearerToken` but the token
@@ -58,6 +68,11 @@ public struct BearerTokenAuthorizationProvider: AuthorizationProvidingProtocol {
     private let headerField: String
     private let missingTokenPolicy: MissingTokenPolicy
 
+    /// - Parameters:
+    ///   - headerField: header that carries the token; `"Authorization"` by default.
+    ///   - missingTokenPolicy: what to do when the provider yields no token.
+    ///   - tokenProvider: closure returning the current token; called on every
+    ///     request, so it always sees the freshest value. May throw.
     public init(
         headerField: String = "Authorization",
         missingTokenPolicy: MissingTokenPolicy = .fail,
