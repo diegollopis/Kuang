@@ -44,4 +44,6 @@ jobs:
         run: |
           BASELINE=$(git describe --tags --abbrev=0)
           echo "Baseline: $BASELINE"
-          swift package diagnose-api-breaking-changes "$BASELINE"
+          swift package diagnose-api-breaking-changes \
+            --breakage-allowlist-path api-breakage-allowlist.txt \
+            "$BASELINE"

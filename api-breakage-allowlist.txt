@@ -1,0 +1,11 @@
+# Intentional API breakages accepted for the next major release (3.0.0).
+# CI's "API breaking changes" job passes this file to
+# `swift package diagnose-api-breaking-changes --breakage-allowlist-path`.
+# Entries are the diagnostic text without the "API breakage: " prefix; the job
+# still prints allowed breakages but no longer fails on them. Clear the
+# entries after the release that ships them, once the baseline tag includes
+# the change.
+
+# Streaming (PR #6): clients switching exhaustively over NetworkError must add
+# a case for streams dropped mid-iteration.
+enumelement NetworkError.streamInterrupted has been added as a new enum case

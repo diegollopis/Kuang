@@ -38,8 +38,14 @@ package. Swift tools 5.10; platforms iOS 15+ / macOS 12+. No dependencies.
   `TestTags.swift`. Test doubles are hand-written spies/stubs, declared
   `private` in the test file that uses them.
 - Public API changes should stay additive when possible (defaulted protocol
-  requirements, defaulted init parameters) so existing conformances keep
-  compiling.
+  requirements) so existing conformances keep compiling. CI diffs the public
+  API against the latest release tag (`swift package
+  diagnose-api-breaking-changes`); note that adding a defaulted parameter to
+  an existing `init`/`func` changes its symbol and is flagged as a removal —
+  add a new overload and keep the old signature instead. Intentional
+  breakages go in `api-breakage-allowlist.txt` (entry format: the diagnostic
+  text without the "API breakage: " prefix), imply a major release, and are
+  cleared after that release ships.
 
 ## Verification
 

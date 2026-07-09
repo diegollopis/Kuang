@@ -73,6 +73,36 @@ public final class HTTPClient: NetworkClientProtocol, Sendable {
         self.interceptors = interceptors
     }
 
+    /// The pre-streaming initializer, kept as a distinct overload (not folded
+    /// into the one above via its default) so the symbol released in 2.0.0
+    /// still exists and API-compatibility tooling sees no removal.
+    ///
+    /// - Parameters:
+    ///   - configuration: base URL, default headers, coders and retry cap.
+    ///   - session: transport to use; `URLSession.shared` by default.
+    ///   - authorizationProvider: turns each endpoint's ``AuthorizationType``
+    ///     into headers. Defaults to ``EmptyAuthorizationProvider``, which
+    ///     fails `.bearerToken` endpoints.
+    ///   - logger: traffic observer; logging is disabled by default.
+    ///   - interceptors: run in order on every request (see
+    ///     ``NetworkInterceptorProtocol``).
+    public convenience init(
+        configuration: NetworkConfiguration,
+        session: HTTPSessionProtocol = URLSession.shared,
+        authorizationProvider: AuthorizationProvidingProtocol = EmptyAuthorizationProvider(),
+        logger: NetworkLoggingProtocol = DisabledNetworkLogger(),
+        interceptors: [NetworkInterceptorProtocol] = []
+    ) {
+        self.init(
+            configuration: configuration,
+            session: session,
+            streamingSession: URLSession.shared,
+            authorizationProvider: authorizationProvider,
+            logger: logger,
+            interceptors: interceptors
+        )
+    }
+
     public func request<T: Decodable>(endpoint: EndpointProtocol, responseType: T.Type) async throws -> T {
         let data = try await send(endpoint)
         return try decode(data, as: responseType)
