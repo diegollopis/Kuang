@@ -35,7 +35,10 @@ jobs:
   api-breakage:
     name: API breaking changes
     if: github.event_name == 'pull_request'
-    runs-on: macos-latest
+    # Pinned instead of macos-latest: older images carry a SwiftPM whose
+    # --breakage-allowlist-path does not affect the exit code, so the job
+    # would fail even with every breakage allowlisted.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
