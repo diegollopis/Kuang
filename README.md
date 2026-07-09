@@ -14,6 +14,8 @@ definitions into `URLRequest`s, executes them with `async/await`, decodes the
 response, and maps transport and HTTP errors into a single `NetworkError` type.
 
 - **Endpoint-driven** — describe an API as an `enum`; the client builds the request.
+- **Streaming** — consume progressive responses as `AsyncThrowingStream`s, with
+  first-class Server-Sent Events support for LLM-style APIs.
 - **Dependency-injected** — session, authorization, logging and interceptors are all
   pluggable, so everything is testable without hitting the network.
 - **Concurrency-safe** — the public surface is `Sendable`; the client is an
@@ -129,6 +131,73 @@ The typed overload returns a **non-optional** value: a successful call always yi
 decoded model, and the absence of a body is expressed by the no-body overload rather
 than a `nil` result. The typed overload is also `@discardableResult`, so you can ignore
 the value when you only care that the call succeeded.
+
+## Streaming
+
+For responses that arrive progressively — Server-Sent Events from LLM APIs, NDJSON
+feeds, long downloads — `HTTPClient` also conforms to `StreamingClientProtocol`.
+Three altitudes are available; pick the highest one that fits your API.
+
+**Decoded events** — for SSE endpoints that put one JSON document per event (the shape
+of every major LLM streaming API):
+
+```swift
+struct ChatDelta: Decodable, Sendable {
+    let text: String
+}
+
+for try await delta in try await client.streamEvents(
+    endpoint: ChatEndpoint.send(message),
+    decoding: ChatDelta.self
+) {
+    render(delta.text)   // tokens appear as they arrive
+}
+```
+
+The `terminator` parameter (default `"[DONE]"`, the OpenAI sentinel) ends the stream
+without being decoded; pass `nil` for APIs without one.
+
+**Raw Server-Sent Events** — when you need the `event:`/`id:` fields or route events by
+type yourself:
+
+```swift
+for try await event in try await client.streamEvents(endpoint: endpoint) {
+    switch event.event {
+    case "content_block_delta": handle(try event.decode(Delta.self))
+    case "message_stop":        return
+    default:                    break
+    }
+}
+```
+
+The bundled parser implements the WHATWG EventSource framing: `\n`/`\r\n`/`\r` line
+endings, events split across chunk boundaries, multi-line `data:` fields, and comment
+keep-alives (which are filtered out, along with data-less events).
+
+**Raw chunks** — `stream(endpoint:)` yields the body as `Data` chunks for everything
+else.
+
+Failures split into two phases. Building the request and validating the status happen
+**before** the stream is returned, so those errors are thrown by the call itself, map
+to the same `NetworkError` cases as `request(endpoint:)` (including the parsed server
+message), and participate in the normal interceptor retry policy. Once the stream is
+handed to you, no retry ever happens — replaying a stream would duplicate chunks you
+already consumed — and a dropped connection surfaces from the iteration as
+`NetworkError.streamInterrupted`. Cancelling the consuming task closes the connection.
+
+Endpoints can declare an optional idle `timeout` (seconds without data before failing);
+streamed responses reset the clock on every received chunk, so slow-but-alive streams
+are not cut off:
+
+```swift
+var timeout: TimeInterval? { 120 }
+```
+
+Streaming uses its own transport abstraction, injected like everything else: pass any
+`HTTPStreamingSessionProtocol` as the client's `streamingSession` (the default adapts
+`URLSession.bytes(for:)`). Loggers receive one entry when a stream opens and one
+summary — bytes, events, duration, error — when it closes, rather than an entry per
+chunk.
 
 ## Configuration
 
@@ -354,6 +423,7 @@ do {
 | `interceptorFailed(String)` | An interceptor's `adapt` threw |
 | `noResponse` | The response was not an `HTTPURLResponse` |
 | `transportFailure(String)` | A URL-loading/transport error |
+| `streamInterrupted(String)` | The connection dropped mid-stream (thrown while iterating) |
 | `decodingFailure(String)` | The response body could not be decoded |
 | `unauthorized` / `forbidden` / `notFound` | `401` / `403` / `404` |
 | `clientError(statusCode:message:)` | Other `4xx` |
