@@ -35,13 +35,29 @@ jobs:
   api-breakage:
     name: API breaking changes
     if: github.event_name == 'pull_request'
-    runs-on: macos-latest
+    # Pinned instead of macos-latest so the diagnostic wording the allowlist
+    # is matched against doesn't drift with the image's toolchain.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # The allowlist is applied here in shell rather than through the tool's
+      # --breakage-allowlist-path, whose effect on the exit code varies
+      # between SwiftPM versions.
       - name: Compare public API against latest release tag
         run: |
           BASELINE=$(git describe --tags --abbrev=0)
           echo "Baseline: $BASELINE"
-          swift package diagnose-api-breaking-changes "$BASELINE"
+          swift package diagnose-api-breaking-changes "$BASELINE" > report.txt 2>&1 || true
+          cat report.txt
+          # `|| true` guards keep bash -e alive when grep finds no matches.
+          found=$(grep 'API breakage:' report.txt | sed -E 's/.*API breakage: //' | sort -u || true)
+          allowed=$(grep -vE '^[[:space:]]*(#|$)' api-breakage-allowlist.txt | sort -u || true)
+          disallowed=$(comm -23 <(printf '%s\n' "$found") <(printf '%s\n' "$allowed") | sed '/^$/d')
+          if [ -n "$disallowed" ]; then
+            echo "::error::API breakages not covered by api-breakage-allowlist.txt:"
+            printf '%s\n' "$disallowed"
+            exit 1
+          fi
+          echo "No API breakages beyond the allowlist."

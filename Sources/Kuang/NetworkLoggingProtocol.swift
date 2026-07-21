@@ -25,6 +25,34 @@ public struct NetworkLogContext: Sendable {
     }
 }
 
+/// What a streamed response looked like when it ended, reported once to the
+/// logger. Streams deliberately log open/close summaries instead of one entry
+/// per chunk — an LLM response emits hundreds of events.
+public struct StreamClosureSummary: Sendable {
+    /// Total body bytes received.
+    public let byteCount: Int
+    /// Events yielded, when the stream was consumed as Server-Sent Events;
+    /// `nil` for raw data streams.
+    public let eventCount: Int?
+    /// Elapsed time from opening the connection to the stream ending.
+    public let duration: TimeInterval
+    /// The failure that ended the stream, or `nil` when it ended normally or
+    /// was cancelled by the consumer.
+    public let error: NetworkError?
+
+    /// - Parameters:
+    ///   - byteCount: total body bytes received.
+    ///   - eventCount: events yielded; `nil` for raw data streams.
+    ///   - duration: elapsed time from opening the connection to the end.
+    ///   - error: the failure that ended the stream, when there was one.
+    public init(byteCount: Int, eventCount: Int? = nil, duration: TimeInterval, error: NetworkError? = nil) {
+        self.byteCount = byteCount
+        self.eventCount = eventCount
+        self.duration = duration
+        self.error = error
+    }
+}
+
 /// Receives every request, response, error and retry decision handled by
 /// ``HTTPClient``. Implement it to route traffic to your own sink; the
 /// package ships ``ConsoleNetworkLogger`` and ``DisabledNetworkLogger``.
@@ -41,6 +69,21 @@ public protocol NetworkLoggingProtocol: Sendable {
     /// Called when an interceptor decided to retry a failed attempt. Never
     /// called with ``RetryDecision/doNotRetry``.
     func log(retryDecision: RetryDecision, dueTo error: NetworkError, context: NetworkLogContext)
+    /// Called when a streamed response's headers arrived and passed status
+    /// validation, just before body chunks start flowing. `duration` covers
+    /// opening the connection up to the headers. Defaults to a no-op.
+    func log(streamOpened response: HTTPURLResponse, duration: TimeInterval, context: NetworkLogContext)
+    /// Called exactly once when a streamed body ends — normally, by consumer
+    /// cancellation, or with the failure carried in `summary`. Defaults to a
+    /// no-op.
+    func log(streamClosed summary: StreamClosureSummary, context: NetworkLogContext)
+}
+
+public extension NetworkLoggingProtocol {
+    // No-op defaults keep conformances written before streaming existed
+    // source-compatible.
+    func log(streamOpened response: HTTPURLResponse, duration: TimeInterval, context: NetworkLogContext) {}
+    func log(streamClosed summary: StreamClosureSummary, context: NetworkLogContext) {}
 }
 
 /// The default logger — discards every entry.
@@ -52,6 +95,8 @@ public struct DisabledNetworkLogger: NetworkLoggingProtocol {
     public func log(responseData: Data, response: HTTPURLResponse, duration: TimeInterval, context: NetworkLogContext) {}
     public func log(error: Error, request: URLRequest?, context: NetworkLogContext) {}
     public func log(retryDecision: RetryDecision, dueTo error: NetworkError, context: NetworkLogContext) {}
+    public func log(streamOpened response: HTTPURLResponse, duration: TimeInterval, context: NetworkLogContext) {}
+    public func log(streamClosed summary: StreamClosureSummary, context: NetworkLogContext) {}
 }
 
 /// Verbose traffic logger built on `os.Logger`.
@@ -138,6 +183,24 @@ public struct ConsoleNetworkLogger: NetworkLoggingProtocol {
             return
         }
         logger.debug("🔁 Retry \(tag(context), privacy: .public) attempt \(context.attempt + 1, privacy: .public) \(timing, privacy: .public) — after: \(String(describing: error), privacy: .public)")
+    }
+
+    public func log(streamOpened response: HTTPURLResponse, duration: TimeInterval, context: NetworkLogContext) {
+        let head = """
+        \(response.url?.absoluteString ?? "-")
+        Status Code: \(response.statusCode) (\(formatted(duration)))
+        """
+        logger.debug("🌊 Stream opened \(tag(context), privacy: .public)\n\(head, privacy: .public)")
+    }
+
+    public func log(streamClosed summary: StreamClosureSummary, context: NetworkLogContext) {
+        let events = summary.eventCount.map { ", \($0) events" } ?? ""
+        let stats = "\(summary.byteCount) bytes\(events) in \(formatted(summary.duration))"
+        if let error = summary.error {
+            logger.error("🌊 Stream failed \(tag(context), privacy: .public) after \(stats, privacy: .public)\n\(String(describing: error), privacy: .public)")
+        } else {
+            logger.debug("🌊 Stream closed \(tag(context), privacy: .public) \(stats, privacy: .public)")
+        }
     }
 
     private func tag(_ context: NetworkLogContext) -> String {

@@ -20,6 +20,11 @@ public protocol EndpointProtocol: Sendable {
     var queryItems: [URLQueryItem] { get }
     /// How the request is authorized. Defaults to ``AuthorizationType/none``.
     var authorizationType: AuthorizationType { get }
+    /// Seconds the request may go without receiving data before failing with
+    /// a timeout; `nil` keeps the session's default. The clock resets whenever
+    /// data arrives, so streamed responses stay alive as long as chunks keep
+    /// flowing. Defaults to `nil`.
+    var timeout: TimeInterval? { get }
 }
 
 public extension EndpointProtocol {
@@ -27,4 +32,5 @@ public extension EndpointProtocol {
     var headers: [String: String] { [:] }
     var queryItems: [URLQueryItem] { [] }
     var authorizationType: AuthorizationType { .none }
+    var timeout: TimeInterval? { nil }
 }

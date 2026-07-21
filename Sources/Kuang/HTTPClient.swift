@@ -36,15 +36,21 @@ public protocol NetworkClientProtocol: Sendable {
 /// propagates as Swift's `CancellationError`.
 public final class HTTPClient: NetworkClientProtocol, Sendable {
 
-    private let configuration: NetworkConfiguration
+    // `configuration`, `streamingSession` and `logger` are internal (not
+    // private) so the streaming conformance in HTTPClient+Streaming.swift can
+    // reach them.
+    let configuration: NetworkConfiguration
     private let session: HTTPSessionProtocol
+    let streamingSession: HTTPStreamingSessionProtocol
     private let authorizationProvider: AuthorizationProvidingProtocol
-    private let logger: NetworkLoggingProtocol
+    let logger: NetworkLoggingProtocol
     private let interceptors: [NetworkInterceptorProtocol]
 
     /// - Parameters:
     ///   - configuration: base URL, default headers, coders and retry cap.
     ///   - session: transport to use; `URLSession.shared` by default.
+    ///   - streamingSession: transport used by the streaming API (see
+    ///     ``StreamingClientProtocol``); `URLSession.shared` by default.
     ///   - authorizationProvider: turns each endpoint's ``AuthorizationType``
     ///     into headers. Defaults to ``EmptyAuthorizationProvider``, which
     ///     fails `.bearerToken` endpoints.
@@ -54,15 +60,47 @@ public final class HTTPClient: NetworkClientProtocol, Sendable {
     public init(
         configuration: NetworkConfiguration,
         session: HTTPSessionProtocol = URLSession.shared,
+        streamingSession: HTTPStreamingSessionProtocol = URLSession.shared,
         authorizationProvider: AuthorizationProvidingProtocol = EmptyAuthorizationProvider(),
         logger: NetworkLoggingProtocol = DisabledNetworkLogger(),
         interceptors: [NetworkInterceptorProtocol] = []
     ) {
         self.configuration = configuration
         self.session = session
+        self.streamingSession = streamingSession
         self.authorizationProvider = authorizationProvider
         self.logger = logger
         self.interceptors = interceptors
+    }
+
+    /// The pre-streaming initializer, kept as a distinct overload (not folded
+    /// into the one above via its default) so the symbol released in 2.0.0
+    /// still exists and API-compatibility tooling sees no removal.
+    ///
+    /// - Parameters:
+    ///   - configuration: base URL, default headers, coders and retry cap.
+    ///   - session: transport to use; `URLSession.shared` by default.
+    ///   - authorizationProvider: turns each endpoint's ``AuthorizationType``
+    ///     into headers. Defaults to ``EmptyAuthorizationProvider``, which
+    ///     fails `.bearerToken` endpoints.
+    ///   - logger: traffic observer; logging is disabled by default.
+    ///   - interceptors: run in order on every request (see
+    ///     ``NetworkInterceptorProtocol``).
+    public convenience init(
+        configuration: NetworkConfiguration,
+        session: HTTPSessionProtocol = URLSession.shared,
+        authorizationProvider: AuthorizationProvidingProtocol = EmptyAuthorizationProvider(),
+        logger: NetworkLoggingProtocol = DisabledNetworkLogger(),
+        interceptors: [NetworkInterceptorProtocol] = []
+    ) {
+        self.init(
+            configuration: configuration,
+            session: session,
+            streamingSession: URLSession.shared,
+            authorizationProvider: authorizationProvider,
+            logger: logger,
+            interceptors: interceptors
+        )
     }
 
     public func request<T: Decodable>(endpoint: EndpointProtocol, responseType: T.Type) async throws -> T {
@@ -98,27 +136,7 @@ private extension HTTPClient {
                 return try await perform(preparedRequest, context: context)
             } catch let networkError as NetworkError {
                 logger.log(error: networkError, request: request, context: context)
-
-                // `attempt` is zero-based, so `attempt + 1` is the number of
-                // attempts already made.
-                guard attempt + 1 < configuration.maxAttempts else {
-                    throw networkError
-                }
-
-                let decision = await retryDecision(for: endpoint, dueTo: networkError, attempt: attempt)
-                switch decision {
-                case .doNotRetry:
-                    throw networkError
-                case .retry:
-                    logger.log(retryDecision: decision, dueTo: networkError, context: context)
-                    attempt += 1
-                case .retryAfter(let delay):
-                    logger.log(retryDecision: decision, dueTo: networkError, context: context)
-                    // Throws `CancellationError` if the task is cancelled while
-                    // waiting, aborting the retry loop.
-                    try await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
-                    attempt += 1
-                }
+                try await waitForGrantedRetry(for: endpoint, dueTo: networkError, attempt: &attempt, context: context)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -131,14 +149,6 @@ private extension HTTPClient {
         }
     }
 
-    func prepareRequest(for endpoint: EndpointProtocol) async throws -> URLRequest {
-        var request = try buildRequest(from: endpoint)
-        for interceptor in interceptors {
-            request = try await interceptor.adapt(request, for: endpoint)
-        }
-        return request
-    }
-
     func perform(_ request: URLRequest, context: NetworkLogContext) async throws -> Data {
         let start = DispatchTime.now()
         do {
@@ -148,8 +158,7 @@ private extension HTTPClient {
                 throw NetworkError.noResponse
             }
 
-            let duration = TimeInterval(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000_000
-            logger.log(responseData: data, response: httpResponse, duration: duration, context: context)
+            logger.log(responseData: data, response: httpResponse, duration: Self.elapsedSeconds(since: start), context: context)
             try validateStatusCode(of: httpResponse, data: data)
 
             return data
@@ -175,6 +184,9 @@ private extension HTTPClient {
 
         var request = URLRequest(url: url)
         request.httpMethod = endpoint.method.rawValue
+        if let timeout = endpoint.timeout {
+            request.timeoutInterval = timeout
+        }
         request.allHTTPHeaderFields = configuration.defaultHeaders.merging(endpoint.headers) { _, new in
             new
         }
@@ -237,6 +249,20 @@ private extension HTTPClient {
         }
     }
 
+}
+
+// Internal, not private: shared with the streaming conformance in
+// HTTPClient+Streaming.swift.
+extension HTTPClient {
+
+    func prepareRequest(for endpoint: EndpointProtocol) async throws -> URLRequest {
+        var request = try buildRequest(from: endpoint)
+        for interceptor in interceptors {
+            request = try await interceptor.adapt(request, for: endpoint)
+        }
+        return request
+    }
+
     func validateStatusCode(of response: HTTPURLResponse, data: Data) throws {
         let message = configuration.errorMessageParser.message(from: data, response: response)
 
@@ -256,5 +282,40 @@ private extension HTTPClient {
         default:
             throw NetworkError.unexpectedStatusCode(response.statusCode, message: message)
         }
+    }
+
+    /// Applies the retry policy after a failed attempt: rethrows `error` when
+    /// the attempt budget is exhausted or no interceptor grants a retry;
+    /// otherwise waits any requested delay and bumps `attempt`.
+    func waitForGrantedRetry(
+        for endpoint: EndpointProtocol,
+        dueTo error: NetworkError,
+        attempt: inout Int,
+        context: NetworkLogContext
+    ) async throws {
+        // `attempt` is zero-based, so `attempt + 1` is the number of attempts
+        // already made.
+        guard attempt + 1 < configuration.maxAttempts else {
+            throw error
+        }
+
+        let decision = await retryDecision(for: endpoint, dueTo: error, attempt: attempt)
+        switch decision {
+        case .doNotRetry:
+            throw error
+        case .retry:
+            logger.log(retryDecision: decision, dueTo: error, context: context)
+            attempt += 1
+        case .retryAfter(let delay):
+            logger.log(retryDecision: decision, dueTo: error, context: context)
+            // Throws `CancellationError` if the task is cancelled while
+            // waiting, aborting the retry loop.
+            try await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
+            attempt += 1
+        }
+    }
+
+    static func elapsedSeconds(since start: DispatchTime) -> TimeInterval {
+        TimeInterval(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000_000
     }
 }

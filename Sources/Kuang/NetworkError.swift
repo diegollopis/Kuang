@@ -21,6 +21,10 @@ public enum NetworkError: Error, Equatable, Sendable {
     /// A URL-loading/transport error (no connectivity, timeout…); the
     /// associated value is its localized description.
     case transportFailure(String)
+    /// The connection dropped while a streamed body was being received; the
+    /// associated value is the underlying error's localized description.
+    /// Thrown while iterating a stream, never by the call that opened it.
+    case streamInterrupted(String)
     /// The response body could not be decoded into the requested type.
     case decodingFailure(String)
     /// Any `4xx` other than 401, 403 and 404.
@@ -55,7 +59,8 @@ extension NetworkError: LocalizedError {
             return Self.localized("error.interceptorFailed")
         case .noResponse:
             return Self.localized("error.noResponse")
-        case .transportFailure(let message):
+        case .transportFailure(let message),
+             .streamInterrupted(let message):
             // Already-localized description coming from the underlying URL error.
             return message
         case .decodingFailure:
